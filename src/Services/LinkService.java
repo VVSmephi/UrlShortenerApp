@@ -1,6 +1,7 @@
 package Services;
 
 import Enums.OpenResult;
+import Interfaces.INotifier;
 import Models.ShortLink;
 import Repositories.InMemoryRepository;
 
@@ -15,10 +16,12 @@ import java.util.UUID;
 
 public class LinkService {
     private final InMemoryRepository repo;
+    private final INotifier notifier;
     private final Duration defaultTtl;
 
-    public LinkService(InMemoryRepository repo, Duration defaultTtl) {
+    public LinkService(InMemoryRepository repo, INotifier notifier, Duration defaultTtl) {
         this.repo = repo;
+        this.notifier = notifier;
         this.defaultTtl = defaultTtl;
     }
 
@@ -26,7 +29,7 @@ public class LinkService {
         Instant now = Instant.now();
         Duration ttl = ttlOverride != null ? ttlOverride : defaultTtl;
         String id = generateId(owner, target);
-        // Гарантия уникальности
+
         while (repo.exists(id)) id = generateId(owner, target, UUID.randomUUID().toString());
         ShortLink link = new ShortLink(
                 id, owner, target, now, now.plus(ttl),
@@ -41,13 +44,18 @@ public class LinkService {
         ShortLink l = repo.get(id);
         if (l == null) return OpenResult.NOT_FOUND;
         Instant now = Instant.now();
-        if (!l.active()) return OpenResult.INACTIVE;
+        if (!l.active()) {
+            notifier.notify("Ссылка недоступна (блокирована вручную или по лимиту)");
+            return OpenResult.INACTIVE;
+        }
         if (now.isAfter(l.expiresAt())) {
             repo.save(l.withActive(false));
+            notifier.notify("Время жизни ссылки " + id + " истекло!");
             return OpenResult.EXPIRED;
         }
         if (l.maxClicks() > 0 && l.clicks() >= l.maxClicks()) {
             repo.save(l.withActive(false));
+            notifier.notify("Ссылка " + id + " заблокирована — лимит переходов исчерпан!");
             return OpenResult.LIMIT_EXCEEDED;
         }
 
